@@ -115,16 +115,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: amd64
-            runner: ubuntu-24.04
-            image: ironclaw
-            file: Dockerfile
-            target: runtime
-          - platform: amd64
-            runner: ubuntu-24.04
-            image: ironclaw-worker
-            file: Dockerfile.worker
-            target: ""
           - platform: arm64
             runner: ubuntu-24.04-arm
             image: ironclaw
