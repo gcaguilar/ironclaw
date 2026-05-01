@@ -120,6 +120,11 @@ jobs:
             image: ironclaw
             file: Dockerfile
             target: runtime
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+            image: ironclaw-worker
+            file: Dockerfile.worker
+            target: ""
 
     steps:
       - name: Checkout
