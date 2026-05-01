@@ -33,13 +33,16 @@ env:
   WORKER_IMAGE_NAME: ghcr.io/gcaguilar/ironclaw-worker
 
 jobs:
-  build:
-    name: Build & Push
+  version:
+    name: Resolve version
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
-      actions: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.source_sha.outputs.sha }}
+      sha_short: ${{ steps.source_sha.outputs.sha_short }}
+      tags: ${{ steps.tags.outputs.tags }}
+      worker_tags: ${{ steps.tags.outputs.worker_tags }}
+      target: ${{ steps.tags.outputs.target }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -51,6 +54,7 @@ jobs:
         run: |
           SOURCE_SHA="$(git rev-parse HEAD)"
           echo "sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=sha-${SOURCE_SHA::7}" >> "$GITHUB_OUTPUT"
           echo "Source commit: ${SOURCE_SHA}"
 
       - name: Extract version from Cargo.toml
@@ -84,23 +88,14 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           IS_RELEASE_BUILD: ${{ inputs.release && 'true' || 'false' }}
           INPUT_TAG: ${{ inputs.tag }}
-          SOURCE_SHA: ${{ steps.source_sha.outputs.sha }}
+          SOURCE_SHA: ${{ steps.source_sha.outputs.sha_short }}
         run: |
-          SHA="sha-${SOURCE_SHA::7}"
-          echo "sha_tag=${SHA}" >> "$GITHUB_OUTPUT"
-
           if [[ "${IS_RELEASE_BUILD}" == "true" ]]; then
-            # Release: :version + :latest + :sha-xxx
-            TAGS="${IMAGE_NAME}:${VERSION}"
-            TAGS="${TAGS},${IMAGE_NAME}:latest"
-            TAGS="${TAGS},${IMAGE_NAME}:${SHA}"
-            WORKER_TAGS="${WORKER_IMAGE_NAME}:${VERSION}"
-            WORKER_TAGS="${WORKER_TAGS},${WORKER_IMAGE_NAME}:latest"
-            WORKER_TAGS="${WORKER_TAGS},${WORKER_IMAGE_NAME}:${SHA}"
+            TAGS="${IMAGE_NAME}:${VERSION},${IMAGE_NAME}:latest,${IMAGE_NAME}:${SOURCE_SHA}"
+            WORKER_TAGS="${WORKER_IMAGE_NAME}:${VERSION},${WORKER_IMAGE_NAME}:latest,${WORKER_IMAGE_NAME}:${SOURCE_SHA}"
           else
-            # Manual dispatch: :sha-xxx only
-            TAGS="${IMAGE_NAME}:${SHA}"
-            WORKER_TAGS="${WORKER_IMAGE_NAME}:${SHA}"
+            TAGS="${IMAGE_NAME}:${SOURCE_SHA}"
+            WORKER_TAGS="${WORKER_IMAGE_NAME}:${SOURCE_SHA}"
           fi
 
           if [[ -n "${INPUT_TAG}" ]]; then
@@ -112,57 +107,89 @@ jobs:
           echo "worker_tags=${WORKER_TAGS}" >> "$GITHUB_OUTPUT"
           echo "target=runtime" >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+  build:
+    name: Build (${{ matrix.platform }}, ${{ matrix.image }})
+    runs-on: ${{ matrix.runner }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: amd64
+            runner: ubuntu-24.04
+            image: ironclaw
+            file: Dockerfile
+            target: runtime
+          - platform: amd64
+            runner: ubuntu-24.04
+            image: ironclaw-worker
+            file: Dockerfile.worker
+            target: ""
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+            image: ironclaw
+            file: Dockerfile
+            target: runtime
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+            image: ironclaw-worker
+            file: Dockerfile.worker
+            target: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          platforms: arm64
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
           driver-opts: image=moby/buildkit:latest
 
-      - name: Build (ironclaw)
+      - name: Build (${{ matrix.image }})
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.file }}
           push: false
-          tags: ${{ steps.tags.outputs.tags }}
-          target: ${{ steps.tags.outputs.target }}
+          tags: ${{ matrix.image == 'ironclaw-worker' && needs.version.outputs.worker_tags || needs.version.outputs.tags }}
+          target: ${{ matrix.target }}
           labels: |
-            ironclaw.git.sha=${{ steps.source_sha.outputs.sha }}
-          platforms: linux/amd64,linux/arm64
+            ironclaw.git.sha=${{ needs.version.outputs.sha }}
+          platforms: linux/${{ matrix.platform }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build (ironclaw-worker)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.worker
-          push: false
-          tags: ${{ steps.tags.outputs.worker_tags }}
-          labels: |
-            ironclaw.git.sha=${{ steps.source_sha.outputs.sha }}
-          platforms: linux/amd64,linux/arm64
-          cache-from: type=gha,scope=worker
-          cache-to: type=gha,mode=max,scope=worker
-
+  summary:
+    name: Summary
+    runs-on: ubuntu-24.04
+    needs: [version, build]
+    if: always()
+    steps:
       - name: Summary
         run: |
           {
             echo "## Docker Images"
             echo ""
+            if [ "${{ needs.build.result }}" == "success" ]; then
+              echo "**All builds passed**"
+            elif [ "${{ needs.build.result }}" == "failure" ]; then
+              echo "**Some builds failed**"
+            else
+              echo "**Builds skipped or cancelled**"
+            fi
+            echo ""
             echo "**ironclaw:**"
             echo '```'
-            echo "${{ steps.tags.outputs.tags }}" | tr ',' '\n'
+            echo "${{ needs.version.outputs.tags }}" | tr ',' '\n'
             echo '```'
             echo ""
             echo "**ironclaw-worker:**"
             echo '```'
-            echo "${{ steps.tags.outputs.worker_tags }}" | tr ',' '\n'
+            echo "${{ needs.version.outputs.worker_tags }}" | tr ',' '\n'
             echo '```'
             echo ""
-            echo "- version: \`${{ steps.version.outputs.version }}\`"
-            echo "- sha: \`${{ steps.source_sha.outputs.sha }}\`"
+            echo "- version: \`${{ needs.version.outputs.version }}\`"
+            echo "- sha: \`${{ needs.version.outputs.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
