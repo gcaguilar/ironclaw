@@ -168,7 +168,7 @@ jobs:
           file: ${{ matrix.file }}
           push: true
           tags: |
-            ${{ matrix.image == 'ironclaw-worker' && needs.version.outputs.worker_tags || needs.version.outputs.tags }},${{ matrix.image == 'ironclaw-worker' && needs.version.outputs.worker_tags || needs.version.outputs.tags }}:${{ steps.plat_tag.outputs.tag }}
+            ${{ matrix.image == 'ironclaw-worker' && needs.version.outputs.worker_tags || needs.version.outputs.tags }},${{ matrix.image == 'ironclaw-worker' && needs.version.outputs.worker_tags || needs.version.outputs.tags }}+${{ steps.plat_tag.outputs.tag }}
           target: ${{ matrix.target }}
           labels: |
             ironclaw.git.sha=${{ needs.version.outputs.sha }}
@@ -198,8 +198,8 @@ jobs:
           for TAG in $(echo "$TAGS" | tr ',' '\n'); do
             echo "Merging multi-platform manifest for $TAG"
             docker buildx imagetools create -t "$TAG" \
-              "$TAG:linux_amd64" \
-              "$TAG:linux_arm64_v8"
+              "${TAG}+linux_amd64" \
+              "${TAG}+linux_arm64_v8"
           done
 
       - name: Merge ironclaw-worker manifests
@@ -208,8 +208,8 @@ jobs:
           for TAG in $(echo "$TAGS" | tr ',' '\n'); do
             echo "Merging multi-platform manifest for $TAG"
             docker buildx imagetools create -t "$TAG" \
-              "$TAG:linux_amd64" \
-              "$TAG:linux_arm64_v8"
+              "${TAG}+linux_amd64" \
+              "${TAG}+linux_arm64_v8"
           done
 
   summary:
