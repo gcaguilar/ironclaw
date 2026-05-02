@@ -1,7 +1,45 @@
+# Build artifacts
 target/
+target-dist/
+target/dist/
+target/wasm-bundles/
+target/wasm-bundles/checksums.txt
+*.wasm
+
+# Git
 .git/
+.gitignore
+
+# Env
 .env
 .env.*
+
+# Docs (not needed for build, except CLAUDE.md)
 *.md
 !CLAUDE.md
+!CHANGELOG.md
+!FEATURE_PARITY.md
+
+# Node
 node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+*.dockerfile
+
+# Misc
+*.log
+*.tmp
+*.bak
+*.cache
