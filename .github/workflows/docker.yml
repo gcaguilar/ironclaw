@@ -28,6 +28,9 @@ on:
         type: string
         default: ""
 
+permissions:
+  packages: write
+
 env:
   IMAGE_NAME: ghcr.io/gcaguilar/ironclaw
   WORKER_IMAGE_NAME: ghcr.io/gcaguilar/ironclaw-worker
@@ -151,7 +154,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute per-platform tag
@@ -161,6 +164,25 @@ jobs:
           PLATFORM_SLUG="${PLATFORM_SLUG//\//_}"
           echo "tag=${PLATFORM_SLUG}" >> "$GITHUB_OUTPUT"
 
+      - name: Compute image tags
+        id: img_tags
+        run: |
+          if [[ "${{ matrix.image }}" == "ironclaw-worker" ]]; then
+            echo "tags=${{ needs.version.outputs.worker_tags }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${{ needs.version.outputs.tags }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute build target
+        id: build_target
+        run: |
+          if [[ -n "${{ matrix.target }}" ]]; then
+            echo "target_flag=--target" >> "$GITHUB_OUTPUT"
+            echo "target_value=${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "target_flag=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push (${{ matrix.image }} - ${{ matrix.os }})
         uses: docker/build-push-action@v6
         with:
@@ -168,8 +190,8 @@ jobs:
           file: ${{ matrix.file }}
           push: true
           tags: |
-            ${{ matrix.image == 'ironclaw-worker' && needs.version.outputs.worker_tags || needs.version.outputs.tags }},${{ matrix.image == 'ironclaw-worker' && needs.version.outputs.worker_tags || needs.version.outputs.tags }}+${{ steps.plat_tag.outputs.tag }}
-          target: ${{ matrix.target }}
+            ${{ steps.img_tags.outputs.tags }},${{ steps.img_tags.outputs.tags }}+${{ steps.plat_tag.outputs.tag }}
+          target: ${{ steps.build_target.outputs.target_value }}
           labels: |
             ironclaw.git.sha=${{ needs.version.outputs.sha }}
           platforms: ${{ matrix.os }}
@@ -189,7 +211,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Merge ironclaw manifests
