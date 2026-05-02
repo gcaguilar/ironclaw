@@ -108,19 +108,29 @@ jobs:
           echo "target=runtime" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build (${{ matrix.platform }}, ${{ matrix.image }})
+    name: Build (${{ matrix.image }}, ${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
     needs: version
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: linux/amd64,linux/arm64/v8
+          - os: linux/amd64
+            runner: ubuntu-24.04
+            image: ironclaw
+            file: Dockerfile
+            target: runtime
+          - os: linux/arm64/v8
             runner: ubuntu-24.04-arm
             image: ironclaw
             file: Dockerfile
             target: runtime
-          - platform: linux/amd64,linux/arm64/v8
+          - os: linux/amd64
+            runner: ubuntu-24.04
+            image: ironclaw-worker
+            file: Dockerfile.worker
+            target: ""
+          - os: linux/arm64/v8
             runner: ubuntu-24.04-arm
             image: ironclaw-worker
             file: Dockerfile.worker
@@ -144,24 +154,68 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push (${{ matrix.image }})
+      - name: Compute per-platform tag
+        id: plat_tag
+        run: |
+          PLATFORM_SLUG="${{ matrix.os }}"
+          PLATFORM_SLUG="${PLATFORM_SLUG//\//_}"
+          echo "tag=${PLATFORM_SLUG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push (${{ matrix.image }} - ${{ matrix.os }})
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.file }}
           push: true
-          tags: ${{ matrix.image == 'ironclaw-worker' && needs.version.outputs.worker_tags || needs.version.outputs.tags }}
+          tags: |
+            ${{ matrix.image == 'ironclaw-worker' && needs.version.outputs.worker_tags || needs.version.outputs.tags }},${{ matrix.image == 'ironclaw-worker' && needs.version.outputs.worker_tags || needs.version.outputs.tags }}:${{ steps.plat_tag.outputs.tag }}
           target: ${{ matrix.target }}
           labels: |
             ironclaw.git.sha=${{ needs.version.outputs.sha }}
-          platforms: ${{ matrix.platform }}
+          platforms: ${{ matrix.os }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  merge-manifests:
+    name: Merge Multi-Platform Manifests
+    runs-on: ubuntu-24.04
+    needs: [version, build]
+    if: ${{ always() && needs.build.result == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge ironclaw manifests
+        run: |
+          TAGS="${{ needs.version.outputs.tags }}"
+          for TAG in $(echo "$TAGS" | tr ',' '\n'); do
+            echo "Merging multi-platform manifest for $TAG"
+            docker buildx imagetools create -t "$TAG" \
+              "$TAG:linux_amd64" \
+              "$TAG:linux_arm64_v8"
+          done
+
+      - name: Merge ironclaw-worker manifests
+        run: |
+          TAGS="${{ needs.version.outputs.worker_tags }}"
+          for TAG in $(echo "$TAGS" | tr ',' '\n'); do
+            echo "Merging multi-platform manifest for $TAG"
+            docker buildx imagetools create -t "$TAG" \
+              "$TAG:linux_amd64" \
+              "$TAG:linux_arm64_v8"
+          done
 
   summary:
     name: Summary
     runs-on: ubuntu-24.04
-    needs: [version, build]
+    needs: [version, build, merge-manifests]
     if: always()
     steps:
       - name: Summary
